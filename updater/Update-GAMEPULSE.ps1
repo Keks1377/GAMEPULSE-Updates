@@ -1,13 +1,14 @@
 #requires -Version 5.1
 <#
-GAMEPULSE updater prototype: GitHub Releases, integrity check, protected data folders,
-transactional file-copy with rollback. This does NOT add an auto-update button to existing EXE.
+GAMEPULSE Update Center script: GitHub Releases, SHA256, protected user data,
+rollback. Included in GAMEPULSE Studio 5.3.1 Update Center.
 Release must contain GAMEPULSE_Studio_Windows_x64.zip and SHA256SUMS.txt.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Check','Install')][string]$Mode = 'Check',
-    [string]$InstallDir = (Split-Path -Parent $PSScriptRoot)
+    [string]$InstallDir = (Split-Path -Parent $PSScriptRoot),
+    [int]$WaitForPid = 0
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -59,14 +60,17 @@ try {
         if ($v -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { Die "Invalid installed version: $v" }
         $installed = [version]$v
     }
-    Write-Host "Installed: $installed | Latest stable: $latest"
-    if ($latest -le $installed) { Write-Host 'No update available.'; exit 0 }
+    Write-Output "INSTALLED=$installed"
+    Write-Output "LATEST=$latest"
+    if ($latest -le $installed) { Write-Output "UP_TO_DATE"; exit 0 }
     $zipUrl = Find-Asset $release $zipAssetName
     $sumUrl = Find-Asset $release $hashAssetName
-    if ($Mode -eq 'Check') {
-        Write-Host "Update available: v$latest"
-        Write-Host "Release page: $($release.html_url)"
-        exit 0
+    Write-Output 'UPDATE_AVAILABLE'
+    if ($Mode -eq 'Check') { exit 0 }
+    if ($WaitForPid -gt 0) {
+        $startTime=Get-Date
+        while((Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue) -and ((Get-Date)-$startTime).TotalSeconds -lt 60){Start-Sleep -Milliseconds 500}
+        if(Get-Process -Id $WaitForPid -ErrorAction SilentlyContinue){Die 'GAMEPULSE did not close in 60 seconds'}
     }
     $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $_.ProcessName -like 'GAMEPULSE_Studio*' -or $_.ProcessName -like 'GAMEPULSE_Engine*'
@@ -85,6 +89,7 @@ try {
     $expected = [regex]::Match($matching[0],'^[a-fA-F0-9]{64}').Value.ToUpperInvariant()
     $actual = (Get-FileHash -LiteralPath $zipFile -Algorithm SHA256).Hash.ToUpperInvariant()
     if ($actual -cne $expected) { Die 'SHA256 checksum mismatch. Installation cancelled.' }
+    Write-Output 'CHECKSUM_OK'
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($zipFile)
@@ -101,7 +106,11 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'GAMEPULSE_Studio.exe') -PathType Leaf)) {
         Die 'Archive must contain GAMEPULSE_Studio.exe at its root.'
     }
-    $backup = Join-Path $InstallDir ('backup_updates\v' + $installed.ToString() + '_before_v' + $latest.ToString())
+    $bundleVersionFile=Join-Path $unpacked $versionFileName
+    if(-not (Test-Path -LiteralPath $bundleVersionFile)){Die 'Release ZIP missing GAMEPULSE_VERSION.txt'}
+    $bundleVersion=(Get-Content -LiteralPath $bundleVersionFile -Raw -Encoding UTF8).Trim()
+    if($bundleVersion -ne $latest.ToString()){Die 'Release ZIP version differs from GitHub Release tag'}
+    $backup = Join-Path $InstallDir ('backup_updates\' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '_from_' + $installed.ToString() + '_to_' + $latest.ToString())
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
     $written = New-Object System.Collections.ArrayList
     try {
@@ -125,7 +134,8 @@ try {
         if ($hadVersion) { Copy-Item -LiteralPath $installedVersionFile -Destination $versionOld -Force }
         [void]$written.Add(@{Target=$installedVersionFile;Old=$versionOld;Existed=$hadVersion})
         [IO.File]::WriteAllText($installedVersionFile, $latest.ToString(), [Text.UTF8Encoding]::new($false))
-        Write-Host "Installed v$latest. Backups are in: $backup"
+        Write-Output "INSTALLED_OK=$latest"
+        Write-Output "BACKUP=$backup"
     } catch {
         $reason = $_
         for ($i = $written.Count-1; $i -ge 0; $i--) {
