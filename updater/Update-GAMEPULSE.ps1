@@ -1,15 +1,16 @@
 #requires -Version 5.1
 <#
 GAMEPULSE Update Center script: GitHub Releases, SHA256, protected user data,
-rollback. Included in GAMEPULSE Studio 5.3.1 Update Center.
+rollback. Updated for GAMEPULSE Studio 5.3.2.
 Release must contain GAMEPULSE_Studio_Windows_x64.zip and SHA256SUMS.txt.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Check','Install')][string]$Mode = 'Check',
-    [string]$InstallDir = (Split-Path -Parent $PSScriptRoot),
+    [string]$InstallDir = '',
     [int]$WaitForPid = 0
 )
+if ([string]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath) }
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = 'Keks1377/GAMEPULSE-Updates'
